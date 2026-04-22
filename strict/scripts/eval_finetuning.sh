@@ -1,17 +1,64 @@
 #!/bin/bash
 
-MODEL_PATH=$1
-LR=${2:-3e-5}           # default: 3e-5
-BSZ=${3:-32}            # default: 32
-BIG_BSZ=${4:-16}        # default: 16
-MAX_EPOCHS=${5:-10}     # default: 10
-WSC_EPOCHS=${6:-30}     # default: 30
-SEED=${7:-42}           # default: 42
+set -a
+source ../.env
+set +a
 
-model_basename=$(basename $MODEL_PATH)
+# Default values
+MODEL_PATH=""
+LR=3e-5
+BSZ=32
+BIG_BSZ=16
+MAX_EPOCHS=10
+WSC_EPOCHS=30
+SEED=42
+WANDB_FLAG=""
+
+# Parse named arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --model_path)
+            MODEL_PATH="$2"
+            shift 2
+            ;;
+        --lr)
+            LR="$2"
+            shift 2
+            ;;
+        --bsz)
+            BSZ="$2"
+            shift 2
+            ;;
+        --big_bsz)
+            BIG_BSZ="$2"
+            shift 2
+            ;;
+        --max_epochs)
+            MAX_EPOCHS="$2"
+            shift 2
+            ;;
+        --wsc_epochs)
+            WSC_EPOCHS="$2"
+            shift 2
+            ;;
+        --seed)
+            SEED="$2"
+            shift 2
+            ;;
+        --wandb)
+            WANDB_FLAG="--wandb"
+            shift
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
 
 for task in {boolq,multirc}; do
-        
+    echo $task
+
     python -m evaluation_pipeline.finetune.run \
         --model_name_or_path "$MODEL_PATH" \
         --train_data "evaluation_data/full_eval/glue_filtered/$task.train.jsonl" \
@@ -29,7 +76,10 @@ for task in {boolq,multirc}; do
         --metrics accuracy f1 mcc \
         --metric_for_valid accuracy \
         --seed $SEED \
-        --verbose
+        --verbose \
+        --padding_side left \
+        --take_final \
+        $WANDB_FLAG
 done
 
 python -m evaluation_pipeline.finetune.run \
@@ -49,7 +99,8 @@ python -m evaluation_pipeline.finetune.run \
     --metrics accuracy f1 mcc \
     --metric_for_valid accuracy \
     --seed $SEED \
-    --verbose
+    --verbose \
+    $WANDB_FLAG
 
 python -m evaluation_pipeline.finetune.run \
     --model_name_or_path "$MODEL_PATH" \
@@ -68,7 +119,8 @@ python -m evaluation_pipeline.finetune.run \
     --metrics accuracy f1 mcc \
     --metric_for_valid accuracy \
     --seed $SEED \
-    --verbose
+    --verbose \
+    $WANDB_FLAG
 
 for task in {mrpc,qqp}; do
         
@@ -89,7 +141,8 @@ for task in {mrpc,qqp}; do
         --metrics accuracy f1 mcc \
         --metric_for_valid f1 \
         --seed $SEED \
-        --verbose
+        --verbose \
+        $WANDB_FLAG
 done
 
 python -m evaluation_pipeline.finetune.run \
@@ -109,4 +162,5 @@ python -m evaluation_pipeline.finetune.run \
     --metrics accuracy \
     --metric_for_valid accuracy \
     --seed $SEED \
-    --verbose
+    --verbose \
+    $WANDB_FLAG
