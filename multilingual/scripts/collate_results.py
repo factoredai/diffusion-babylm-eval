@@ -13,6 +13,51 @@ import argparse
 import json
 from pathlib import Path
 
+# Expected tasks per language — used to warn about partial submissions.
+# Keys match the task names as they appear in the collated submission JSON.
+EXPECTED_ZEROSHOT = {
+    "eng": {"blimp", "hellaswag_en_mubench", "multiblimp_eng", "winogrande_en_mubench", "xstorycloze_en_mubench"},
+    "nld": {"blimp_nl", "hellaswag_nl_mubench", "multiblimp_nld", "winogrande_nl_mubench", "xcomps_nl", "xstorycloze_nl_mubench"},
+    "zho": {"hellaswag_zh_mubench", "winogrande_zh_mubench", "xcomps_zh", "xstorycloze_zh_mubench", "zhoblimp"},
+}
+
+EXPECTED_FINETUNE = {
+    "en": {"arc", "belebele", "bmlama", "mnli", "sib200", "truthfulqa", "xnli"},
+    "nl": {"arc", "belebele", "bmlama", "include", "mnli", "sib200", "truthfulqa"},
+    "zh": {"arc", "belebele", "bmlama", "include", "mnli", "sib200", "truthfulqa", "xnli"},
+}
+
+
+def warn_missing_tasks(
+    zeroshot: dict[str, dict[str, float]],
+    finetune: dict[str, dict[str, float]],
+) -> None:
+    """Print warnings for tasks that are missing within a partially-submitted language.
+
+    A language is considered submitted when at least one of its tasks is present.
+    Entirely absent languages are silently skipped — incomplete submissions are allowed.
+    """
+    warned = False
+
+    for lang, expected in EXPECTED_ZEROSHOT.items():
+        found = expected & zeroshot.keys()
+        if not found:
+            continue  # language not submitted at all — skip
+        for task in sorted(expected - found):
+            print(f"Warning: zeroshot task '{task}' ({lang}) is missing — will be scored as 0.")
+            warned = True
+
+    for lang_code, expected in EXPECTED_FINETUNE.items():
+        found_benchmarks = {task for task, subtasks in finetune.items() if lang_code in subtasks}
+        if not found_benchmarks:
+            continue  # language not submitted at all — skip
+        for task in sorted(expected - found_benchmarks):
+            print(f"Warning: finetune task '{task}' ({lang_code}) is missing — will be scored as 0.")
+            warned = True
+
+    if not warned:
+        print("All tasks present for every submitted language.")
+
 
 def parse_zeroshot(results: dict) -> dict[str, dict[str, float]]:
     """Extract indent-1 tasks from a lm-eval results dict.
@@ -137,6 +182,8 @@ def main():
     root = Path(__file__).resolve().parent.parent  # multilingual/
     zeroshot = load_zeroshot(root / "results", args.model_name)
     finetune = load_finetune(root / "finetune" / "results", args.model_name)
+
+    warn_missing_tasks(zeroshot, finetune)
 
     combined = {**zeroshot, **finetune}
 

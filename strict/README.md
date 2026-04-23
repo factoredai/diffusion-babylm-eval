@@ -10,21 +10,15 @@ If you have questions about or suggestions for this code, please open an issue a
 
 We also welcome pull requests!
 
-## New Tasks
+## Tasks
 
-We have added a couple of new tasks to the text-only evaluation suite:
-- **Derivational Morphology Reveals Analogical Generalization in Large Language Models** [(Hofmann et al., 2024)](https://arxiv.org/abs/2411.07990) - *Tests morphological generalization in LMs through an adjective nominalization task.*
 - **Entity Tracking in Language Models** [(Kim & Schuster, 2023)](https://aclanthology.org/2023.acl-long.213/) - *Tests entity state tracking in LMs. Note: We have changed the evaluation of this task to evaluate LMs' ability to assign the highest probability to the correct continuation (akin to BLiMP and EWoK) rather than generate the correct completion itself as was originally done, to allow for simpler, zero-shot evaluation.*
 - **Cloze probability, predictability ratings, and computational estimates for 205 English sentences, aligned with existing EEG and reading time data** [(De Varda et al., 2023)](https://link.springer.com/article/10.3758/s13428-023-02261-8) - *Connects LM predictions to human reading times, allowing us to assess to what extent LM processing is aligned with human language processing.*
-
-From last years iteration we are still including BLiMP, EWoK, and GLUE for evaluation.
-
-## Hidden Tasks
-
-- **Counting the Bugs in ChatGPT's Wugs: A Multilingual Investigation into the Morphological Capabilities of a Large Language Model** [(Weissweiler et al., 2023)](https://arxiv.org/abs/2310.15113/)  (WUG_PAST) introduce a task for testing morphological generalization, based on a past tense formation task of nonce ("wug") words. We evaluate this task against human predictions: from the participant responses we derive a distribution over possible inflections. This way we can test the "humanlikeness" of a model's generalization behavior, by correlating the model's probability for each inflection against the relative amount of responses we can measure whether they follow similar morphological patterns. Prior to the release of the hidden tasks, we had already included the task of [Hofmann et al. (2024)](https://arxiv.org/abs/2411.07990) (WUG_ADJ), who build on the work of Weissweiler et al. and introduce a similar task for adjective nominalization, in which a nonce ("wug") adjective is nominalized as either an -ity noun or a -ness noun. Performance is measured in the same way, by correlating model probabilities to human judgments. Note that we have changed the evaluation of this task from an "accuracy" based metric to the correlation metric of the WUG_PAST task!
 - **COMPS: Conceptual Minimal Pair Sentences for testing Robust Property Knowledge and its Inheritance in Pre-trained Language Models** [(Misra et al., 2023)](https://aclanthology.org/2023.eacl-main.213/) (COMPS) [Misra et al. (2023)](https://aclanthology.org/2023.eacl-main.213/) introduce a task for testing the property knowledge of language models and whether they can infer that properties of superordinate concepts are inherited by subordinate concepts, each represented by nonce words. The dataset is composed of minimal pair sentences and models are evaluated by whether they assign higher probability to the correct sentence.
 - **Age of Acquisition (AoA) Evaluation Benchmark** [(Chang & Bergen, 2022)](https://doi.org/10.1162/tacl_a_00444) This benchmark tracks word surprisal across training checkpoints to extract learning curves and compute ages of acquisition for vocabulary items. We compute surprisal scores as the negative log probability of target words given their contexts in a test set across training steps [c4-en-10k](https://huggingface.co/datasets/stas/c4-en-10k), and then fit sigmoid functions to the learning trajectory of each word. In the end, the benchmark enables direct comparison between language model and child language development by computing correlation scores between model-derived AoA and human AoA data from the MacArthur-Bates Communicative Development Inventory (CDI) [(Frank et al., 2017)](https://wordbank.stanford.edu).
-
+- **BLiMP: The Benchmark of Linguistic Minimal Pairs** [(Warstadt et al., 2020)](https://aclanthology.org/2020.tacl-1.25/) - *A challenge set of 67 linguistic minimal pair paradigms covering morphology, syntax, and semantics. For each item a model must assign higher probability to the grammatical sentence over the ungrammatical one, providing a fine-grained probe of implicit grammatical knowledge.*
+- **EWoK: Elements of World Knowledge** [(Ivanova et al., 2024)](https://aclanthology.org/2024.emnlp-main.903/) - *Tests whether LMs have acquired real-world knowledge about physical and social domains. Items are minimal pairs that differ in a single world-knowledge-relevant property (e.g. agent properties, spatial relations, social interactions), and models are evaluated by whether they assign higher probability to the contextually appropriate sentence.*
+- **(Super)GLUE** [(Wang et al., 2018](https://aclanthology.org/D18-1269/)[; Wang et al., 2019)](https://papers.nips.cc/paper_files/paper/2019/hash/4496bf24afe7fab6f046bf4923da8de6-Abstract.html) - *A collection of diverse natural language understanding tasks (BoolQ, MNLI, MRPC, MultiRC, QQP, RTE, WSC) that require text classification or textual entailment. Models are fine-tuned on each task and evaluated on accuracy or F1, measuring how well LMs can transfer their learned representations to downstream NLU tasks.*
 
 
 ## Install
@@ -227,75 +221,6 @@ For the strict and strict-small tracks, we release the following baselines: [GPT
 For the multimodal tracks, we release [Flamingo](https://proceedings.neurips.cc/paper_files/paper/2022/file/960a172bc7fbf0177ccccbb411a7d800-Paper-Conference.pdf) and [GIT](https://openreview.net/pdf?id=b4tMhpN0JC) baselines.
 
 For the interaction track, we release two baselines: An "RLHF" baseline, where a model pre-trained on the BabyLM corpus is further finetuned via [PPO](https://arxiv.org/pdf/1707.06347) to maximize a scalar reward mimicking caregiver responses, and a "Preference Optimization" baseline, where a model is optimized via [SimPO](https://arxiv.org/pdf/2405.14734) to prefer teacher corrections over its own generated outputs. More details are available in Section 4.5 of the [call for papers](https://arxiv.org/pdf/2502.10645?).
-
-<!---
-Here are scores for each model on each evaluation task. Each task score is an unweighted mean of each subtask score within that task. We also show macroaverages, which are simply means of each task score (i.e., means across a row of the table). NOTE: for GLUE, we average *accuracies* for all tasks except QQP and MRPC (where we use F1 scores). See end of README for more detailed score breakdowns.
-
-> [!Note]
-> The evaluations below are run on the final model (the one trained for 10 epochs (100M words in Strict-small and 1B words in Strict and Interaction)).
-
-**Strict-small Track (10M)**
-
-*Causal*
-
-| Model | BLiMP | BLiMP Supplement | EWoK | Reading (Eye Tracking) | Reading (Self-Paced Reading Time) | Entity Tracking | WUGs | GLUE | *Macroaverage* |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|GPT-BERT (Causal-focus) | **71.66** | **63.21** | 49.49 | **9.89** | **3.45** | **33.96** | 43.00 |
-|GPT-BERT (Mixed) | 69.62 | 61.56 | **50.23** | 9.50 | 3.37 | 22.27 | 45.00 |
-|GPT-BERT (Masked-focus) | 65.22 | 59.49 | 49.47 | 9.52 | 3.44 | 30.60 | **68.00** |
-|GPT-2 Small | 67.29 | 59.09 | 49.80 | 0.13 | 0.04 | 18.92 | 39.00 |
-
-*MNTP/MLM*
-
-| Model | BLiMP | BLiMP Supplement | EWoK | Reading (Eye Tracking) | Reading (Self-Paced Reading Time) | Entity Tracking | WUGs | GLUE | *Macroaverage* |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|GPT-BERT (Causal-focus) | 69.07 | **64.33** | 49.62 | 9.47 | **3.48** | 39.17 | 43.00 |
-|GPT-BERT (Mixed) | **71.29** | 63.30 | 49.93 | **9.78** | 3.33 | 39.95 | 16.00 |
-|GPT-BERT (Masked-focus) | 70.36 | 63.71 | **49.95** | 9.40 | 3.37 | **40.02** | **57.5** |
-
-
-**Strict Track (100M)**
-
-*Causal*
-
-| Model | BLiMP | BLiMP Supplement | EWoK | Reading (Eye Tracking) | Reading (Self-Paced Reading Time) | Entity Tracking | WUGs | GLUE | *Macroaverage* |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|GPT-BERT (Causal-focus) | **79.29** | **70.42** | **52.32** | 8.36 | 3.02 | | 43.5 |
-|GPT-BERT (Mixed) | 78.37 | 69.23 | 51.79 | 8.74 | **3.59** | | 39.5 |
-|GPT-BERT (Masked-focus) | 74.56 | 63.63 | 51.57 | **8.80** | 3.30 | | **59.00** |
-|GPT-2 Small | 75.07 | 64.96 | 51.22 | 0.47 | 0.06 | 30.11 | 42.5 |
-
-*MNTP/MLM*
-
-| Model | BLiMP | BLiMP Supplement | EWoK | Reading (Eye Tracking) | Reading (Self-Paced Reading Time) | Entity Tracking | WUGs | GLUE | *Macroaverage* |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|GPT-BERT (Causal-focus) | | | | 9.08 | 3.12 | | 37.5 |
-|GPT-BERT (Mixed) | | | | 9.15 | **3.43** | | 37.00 |
-|GPT-BERT (Masked-focus) | | | | **9.34** | 3.34 | | **55.00** |
-
-
-**Interaction Track**
-
-| Model | BLiMP | BLiMP Supplement | EWoK | Reading (Eye Tracking) | Reading (Self-Paced Reading Time) | Entity Tracking | WUGs | GLUE | *Macroaverage* |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-|Preference Optimization | 71.91 | 64.85 | 52.44 | 0.5 | 0.01 | 27.71 | 38.5 |
-
-**Multimodal Track**
-
-Here, we show the performance of the Flamingo and GIT baselines on all text-only *and* multimodal tasks. We also show how performance changes on the multimodal tasks when images are not provided to the model during evaluation (i.e., we use the same trained text-and-image model, but modify the evaluation setup to remove any visual information).
-
-| Model | BLiMP | BLiMP Supplement | EWoK | Reading (Eye Tracking) | Reading (Self-Paced Reading Time) | Entity Tracking | WUGs | GLUE | *Macroaverage* |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-
-| Model | Winoground | VQA | DevBench | *Vision Macroaverage* |
-| --- | --- | --- | --- | --- |
-| Flamingo | 51.6 | 52.3 | 59.5 | *54.5* |
-| Flamingo (no vision) | 50.0 | 45.0 | - | *47.5(\*)* |
-| GIT | 55.5 | 54.1 | 51.1 | *53.6* |
-| GIT (no vision) | 50.0 | 48.4 | - | *49.2(\*)* |
-
-(*) Not directly comparable to other macroaverages, since DevBench scores without vision are not well-defined. These rows are more useful as comparison points for Winoground and VQA with and without visual signals.
---->
 
 ## Submission Requirements
 
