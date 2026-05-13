@@ -100,6 +100,8 @@ python -m evaluation_pipeline.finetune.run \
     --metric_for_valid accuracy \
     --seed $SEED \
     --verbose \
+    --padding_side left \
+    --take_final \
     $WANDB_FLAG
 
 python -m evaluation_pipeline.finetune.run \
@@ -120,6 +122,8 @@ python -m evaluation_pipeline.finetune.run \
     --metric_for_valid accuracy \
     --seed $SEED \
     --verbose \
+    --padding_side left \
+    --take_final \
     $WANDB_FLAG
 
 for task in {mrpc,qqp}; do
@@ -142,6 +146,8 @@ for task in {mrpc,qqp}; do
         --metric_for_valid f1 \
         --seed $SEED \
         --verbose \
+	--padding_side left \
+	--take_final \
         $WANDB_FLAG
 done
 
@@ -163,4 +169,6 @@ python -m evaluation_pipeline.finetune.run \
     --metric_for_valid accuracy \
     --seed $SEED \
     --verbose \
+    --padding_side left \
+    --take_final \
     $WANDB_FLAG
