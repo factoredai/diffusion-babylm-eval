@@ -2,9 +2,10 @@
 Minimal LLada-like trainer
 
 Trains a bidirectional denoiser on the official BabyLM corpus, then
-saves it so the evaluation pipeline can load it. Proper
-minimal-pair scoring is not implemented yet so the saving part is very shaky as it is.
+saves it so the evaluation pipeline can load it.
 """
+
+import itertools
 
 import torch
 import torch.nn.functional as F
@@ -20,7 +21,12 @@ from transformers import (
 
 DATASET_REPO = "BabyLM-community/BabyLM-2026-Strict-Small"
 TOKENIZER = "BabyLM-community/babylm-baseline-10m-gpt-bert-mixed"
-SEQ_LEN, BATCH, STEPS, LR = 128, 32, 10_000, 3e-4
+SEQ_LEN, BATCH, STEPS, LR = (
+    512,
+    16,  # 24 is the MPS ceiling at seq-512 on ~19GB unified memory
+    200,  # smoke run
+    3e-4,
+)
 OUTPUT_DIR = "ckpt/diffusion-babylm"
 if torch.cuda.is_available():
     DEVICE = "cuda"
@@ -32,10 +38,16 @@ else:
 
 def build_model() -> tuple[PreTrainedTokenizerBase, PreTrainedModel]:
     tok: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(TOKENIZER)
+    assert isinstance(tok.pad_token_id, int)  # someone help pyright
     cfg = AutoConfig.from_pretrained(
         "roberta-base",
         vocab_size=len(tok),
-        max_position_embeddings=SEQ_LEN + 2,
+        # roberta-base defaults to pad_token_id=1 but id 1 in this tokenizer is <s>/<cls>
+        pad_token_id=tok.pad_token_id,
+        bos_token_id=tok.bos_token_id,
+        eos_token_id=tok.eos_token_id,
+        # RoBERTa offsets pos embeddings by pad_token_id
+        max_position_embeddings=SEQ_LEN + tok.pad_token_id + 1,
         num_hidden_layers=12,
         hidden_size=512,
         num_attention_heads=8,
@@ -48,16 +60,31 @@ def build_model() -> tuple[PreTrainedTokenizerBase, PreTrainedModel]:
 def make_loader(tok: PreTrainedTokenizerBase) -> DataLoader:
     ds = load_dataset(DATASET_REPO, split="train")
     assert isinstance(ds, Dataset)  # narrow load_dataset's type
+
+    # Tokenize every row (keeping each <s>...</s> as a
+    # natural separator) and pack the token stream into contiguous SEQ_LEN blocks
+    # so nothing is dropped except a sub-block remainder at each map-batch boundary.
     ds = ds.map(
-        lambda b: tok(b["text"], truncation=True, max_length=SEQ_LEN),
+        lambda b: tok(b["text"]),
         batched=True,
-        remove_columns=["text"],
+        remove_columns=ds.column_names,
     )
-    ds = ds.filter(
-        lambda x: len(x["input_ids"]) == SEQ_LEN
-    )  # Sorry I'm lazy, immediate TODO but it's Friday night
+    cols = ds.column_names
+
+    def pack(batch: dict[str, list[list[int]]]) -> dict[str, list[list[int]]]:
+        ids = list(itertools.chain.from_iterable(batch["input_ids"]))
+        n = (len(ids) // SEQ_LEN) * SEQ_LEN
+        blocks = [ids[i : i + SEQ_LEN] for i in range(0, n, SEQ_LEN)]
+        return {"input_ids": blocks, "attention_mask": [[1] * SEQ_LEN for _ in blocks]}
+
+    ds = ds.map(pack, batched=True, batch_size=10_000, remove_columns=cols)
     ds.set_format("torch", columns=["input_ids", "attention_mask"])
-    return DataLoader(ds, batch_size=BATCH, shuffle=True, drop_last=True)
+    return DataLoader(
+        ds,  # pyright: ignore
+        batch_size=BATCH,
+        shuffle=True,
+        drop_last=True,
+    )
 
 
 def diffuse(ids: torch.Tensor, mask_token_id: str):
