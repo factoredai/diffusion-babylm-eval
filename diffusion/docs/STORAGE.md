@@ -60,11 +60,20 @@ words_per_token`. Each checkpoint contains a standard
 step_07812_words_010M/
 ├── config.json                 MaskedDiffusionConfig (incl. auto_map)
 ├── model.safetensors           weights
+├── trainer_state.pt            optimizer + RNG + step (for resume; not uploaded)
 └── ckpt_meta.json              {step, words_seen, words_m, saved_at}
 ```
 
 The set of required checkpoints is fixed by the CFP for Strict-Small:
 `1M, 2M, …, 10M, 20M, 30M, …, 100M` (no 200M–1000M).
+
+**Auto-resume.** Because `runs/` lives on Drive, every checkpoint (weights +
+`trainer_state.pt`) survives a Colab disconnect. Re-launching
+`train.py --condition X --seed S` without `--output-dir` finds the existing run
+for that `(condition, seed)`, loads the latest checkpoint (model + optimizer +
+RNG) and continues at the saved step — the data stream is deterministic in the
+step index, so the order is preserved. Pass `--no-resume` to force a fresh run.
+`trainer_state.pt` is for local resume only and is **not** pushed to the Hub.
 
 ## 3. On the HuggingFace Hub
 

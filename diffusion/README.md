@@ -56,6 +56,7 @@ diffusion/
 │   ├── evaluation.ipynb       evaluate (official `mlm` backend) + collate
 │   └── upload_pipeline.ipynb  upload checkpoints
 ├── docs/
+│   ├── EXPERIMENTS.md         research protocol: hypotheses, conditions, success criteria
 │   ├── STORAGE.md             ← where checkpoints / predictions / evals are saved
 │   └── EVALUATION.md          how to evaluate a diffusion model + submit
 └── checkpoints/               placeholder (real ckpts live in runs/, see STORAGE.md)

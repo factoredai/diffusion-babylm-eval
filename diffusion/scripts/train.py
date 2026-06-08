@@ -221,6 +221,24 @@ def evaluate(model, dev_stream, masking: MaskingProcess, n_batches: int, batch_s
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def find_latest_checkpoint(checkpoints_dir: Path) -> tuple[Path, int] | None:
+    """Return (dir, completed_steps) of the resumable checkpoint with the highest
+    step, or None. Only checkpoints carrying a trainer_state.pt are resumable."""
+    best: tuple[Path, int] | None = None
+    if not checkpoints_dir.is_dir():
+        return None
+    for d in checkpoints_dir.glob("step_*"):
+        if not (d / "trainer_state.pt").exists():
+            continue
+        try:
+            step = json.loads((d / "ckpt_meta.json").read_text())["step"]
+        except Exception:
+            continue
+        if best is None or step > best[1]:
+            best = (d, int(step))
+    return best
+
+
 def train(
     config: dict,
     seed: int,
@@ -229,6 +247,7 @@ def train(
     use_synthetic: bool,
     total_steps_override: int | None = None,
     vocab_size_override: int | None = None,
+    resume: bool = True,
 ) -> dict:
     import torch
     from torch.optim import AdamW
@@ -276,6 +295,36 @@ def train(
         pad_token_id=model_cfg.pad_token_id,
     )
 
+    # ── Resume from the latest checkpoint on Drive (survives Colab restarts) ──
+    # Each checkpoint stores model weights + a trainer_state.pt (optimizer, step,
+    # RNG). On a fresh runtime we reload all of it and continue at the saved step;
+    # the data stream is deterministic in `step`, so the order is preserved.
+    start_step = 0
+    resumed_from = None
+    found = find_latest_checkpoint(checkpoints_dir) if resume else None
+    if found is not None:
+        ckpt_dir, start_step = found
+        # weights_only=False: this is our own trainer_state (optimizer + RNG
+        # objects), not an untrusted download.
+        state = torch.load(ckpt_dir / "trainer_state.pt", map_location=device, weights_only=False)
+        try:
+            from safetensors.torch import load_file
+            sd = load_file(str(ckpt_dir / "model.safetensors"))
+        except Exception:
+            sd = torch.load(ckpt_dir / "pytorch_model.bin", map_location=device, weights_only=True)
+        model.load_state_dict(sd, strict=False)
+        optim.load_state_dict(state["optimizer"])
+        try:
+            torch.set_rng_state(state["torch_rng"].cpu())
+            np.random.set_state(state["numpy_rng"])
+            if device.type == "cuda" and state.get("cuda_rng") is not None:
+                torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda_rng"]])
+        except Exception as e:
+            LOG.warning("Could not restore RNG state: %s", e)
+        resumed_from = ckpt_dir.name
+        LOG.info("Resuming from %s at step %d.", resumed_from, start_step)
+        print(f"** Resuming from checkpoint {resumed_from} (step {start_step}). **")
+
     # Derive total_steps from the word budget unless overridden.
     words_per_token = float(config["data"]["words_per_token"])
     words_per_step = batch_size * block_size * words_per_token
@@ -300,10 +349,14 @@ def train(
     LOG.info("CFP schedule: %d checkpoints over %d steps (%.1f words/step).",
              len(ckpt_schedule), total_steps, words_per_step)
 
-    log_file = (output_dir / "log.jsonl").open("w", encoding="utf-8")
-    loss_csv = (output_dir / "train_loss.csv").open("w", newline="", encoding="utf-8")
+    file_mode = "a" if start_step > 0 else "w"
+    log_file = (output_dir / "log.jsonl").open(file_mode, encoding="utf-8")
+    loss_csv_path = output_dir / "train_loss.csv"
+    write_header = file_mode == "w" or not loss_csv_path.exists() or loss_csv_path.stat().st_size == 0
+    loss_csv = loss_csv_path.open(file_mode, newline="", encoding="utf-8")
     loss_writer = csv.writer(loss_csv)
-    loss_writer.writerow(["step", "loss"])
+    if write_header:
+        loss_writer.writerow(["step", "loss"])
 
     log_every = int(config["logging"]["log_every_steps"])
     eval_every = int(config["logging"]["eval_every_steps"])
@@ -317,13 +370,15 @@ def train(
     LOG.info("Effective batch size: %d (batch_size=%d x grad_accum=%d)",
              batch_size * grad_accum, batch_size, grad_accum)
 
-    print(f"\n=== Training {cond_id} (seed={seed}) for {total_steps} steps on {device} ===")
+    if start_step >= total_steps:
+        print(f"Run already complete ({start_step}/{total_steps} steps). Nothing to do.")
+    print(f"\n=== Training {cond_id} (seed={seed}): steps {start_step}->{total_steps} on {device} ===")
     t0 = time.time()
     last = t0
     run_loss, run_count = 0.0, 0
     optim.zero_grad(set_to_none=True)
 
-    for step in range(total_steps):
+    for step in range(start_step, total_steps):
         batch = provider.next_batch(batch_size, step)
         ids = torch.as_tensor(batch.input_ids, dtype=torch.long, device=device)
         corrupted, labels, weight = masking(ids)
@@ -369,6 +424,14 @@ def train(
             ckpt_dir = checkpoints_dir / f"step_{step+1:05d}_words_{words_m:03d}M"
             ckpt_dir.mkdir(exist_ok=True)
             model.save_pretrained(ckpt_dir)
+            # Trainer state for full resume (optimizer + RNG + completed step).
+            torch.save({
+                "step": step + 1,
+                "optimizer": optim.state_dict(),
+                "torch_rng": torch.get_rng_state(),
+                "numpy_rng": np.random.get_state(),
+                "cuda_rng": (torch.cuda.get_rng_state_all() if device.type == "cuda" else None),
+            }, ckpt_dir / "trainer_state.pt")
             (ckpt_dir / "ckpt_meta.json").write_text(json.dumps({
                 "step": step + 1, "words_seen": words_seen, "words_m": words_m,
                 "saved_at": datetime.now().isoformat(timespec="seconds"),
@@ -386,6 +449,7 @@ def train(
         "elapsed_sec": round(elapsed_total, 1),
         "n_checkpoints": len(ckpt_schedule),
         "output_dir": str(output_dir),
+        "resumed_from": resumed_from,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     meta.update({"finished_at": datetime.now().isoformat(timespec="seconds"),
@@ -410,6 +474,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tokenizer", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--total-steps", type=int, default=None)
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Ignore existing checkpoints and start a fresh run.")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
@@ -439,13 +505,30 @@ def main(argv: list[str] | None = None) -> int:
         # Tiny vocab matching the synthetic corpus.
         vocab_override = 256
     else:
-        output_dir = args.output_dir or (REPO_ROOT / "runs" / run_id)
+        output_dir = args.output_dir
+        if output_dir is None:
+            # Reuse an existing run for this (condition, seed) if one has
+            # checkpoints, so a re-launch on another day continues it instead of
+            # starting a fresh dated run. --no-resume forces a new dir.
+            runs_root = REPO_ROOT / "runs"
+            candidates = sorted(
+                (d for d in runs_root.glob(f"*_{args.condition}_seed{args.seed}")
+                 if (d / "checkpoints").is_dir() and any((d / "checkpoints").glob("step_*"))),
+                key=lambda d: d.stat().st_mtime,
+            )
+            if candidates and not args.no_resume:
+                output_dir = candidates[-1]
+                print(f"Found existing run with checkpoints -> {output_dir.name} "
+                      f"(use --no-resume to start fresh).")
+            else:
+                output_dir = runs_root / run_id
         total_steps = args.total_steps
 
     summary = train(
         config=config, seed=args.seed, token_data_dir=args.token_data,
         output_dir=output_dir, use_synthetic=args.smoke_test,
         total_steps_override=total_steps, vocab_size_override=vocab_override,
+        resume=not args.no_resume,
     )
     print("\n" + "=" * 65)
     print(f"  Run complete: {summary['output_dir']}")

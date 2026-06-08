@@ -201,7 +201,7 @@ def main() -> int:
     if not args.dry_run:
         api.upload_folder(folder_path=str(final_path), repo_id=args.repo_id, repo_type="model",
                           revision="main", commit_message=f"main: final ({final_words}M words)",
-                          ignore_patterns=["*.tmp", "__pycache__/*"])
+                          ignore_patterns=["*.tmp", "__pycache__/*", "trainer_state.pt"])
 
     # Push intermediate checkpoints.
     if not args.only_main:
@@ -218,7 +218,7 @@ def main() -> int:
             t0 = time.time()
             api.upload_folder(folder_path=str(path), repo_id=args.repo_id, repo_type="model",
                               revision=bn, commit_message=f"{bn}: step={step} words={wm}M",
-                              ignore_patterns=["*.tmp", "__pycache__/*"])
+                              ignore_patterns=["*.tmp", "__pycache__/*", "trainer_state.pt"])
             LOG.info("  %s done (%.1fs)", bn, time.time() - t0)
 
     if args.dry_run:

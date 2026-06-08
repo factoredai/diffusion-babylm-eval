@@ -104,7 +104,7 @@ def tokenize_to_shards(docs: list[str], tokenizer, out_dir: Path, shard_tokens: 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--hf-dataset", default="BabyLM-community/babylm-2026-strict-small")
+    p.add_argument("--hf-dataset", default="BabyLM-community/BabyLM-2026-Strict-Small")
     p.add_argument("--split", default="train")
     p.add_argument("--text-column", default="text")
     p.add_argument("--text-file", default=None, help="Use a local corpus instead of an HF dataset.")

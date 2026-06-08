@@ -20,9 +20,11 @@ experiment:
   seed_pool: [13, 42, 71]            # 3 seeds → report median + min/max
 
 data:
-  # Official Strict-Small corpus (detoxified 10M-word release). Override with a
-  # custom dataset id if you build your own — the word budget still applies.
-  hf_dataset: "BabyLM-community/babylm-2026-strict-small"
+  # Official Strict-Small corpus (10M-word release: bnc_spoken, childes,
+  # gutenberg, open_subtitles, simple_wiki, switchboard). Column "text", split
+  # "train" (~1.1M lines). Override with your own dataset id if you build one —
+  # the 10M-word budget still applies.
+  hf_dataset: "BabyLM-community/BabyLM-2026-Strict-Small"
   language: "eng"
   unique_word_budget: 10_000_000     # hard CFP cap on UNIQUE words
   # Conversion used to translate the word budget into a token/step schedule.
