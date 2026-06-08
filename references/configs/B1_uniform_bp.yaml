@@ -1,0 +1,24 @@
+# B1 — Uniform byte-share baseline (BP-corrected)
+# Token-share pi such that each language gets the same BYTES of training data.
+# Since byte_premium(eng) = 1.0, byte_premium(nld) = 1.0516, byte_premium(zho) = 0.9360,
+# Dutch needs slightly FEWER tokens to consume the same byte budget than
+# English or Chinese.
+include: "base.yaml"
+
+condition:
+  id: "B1"
+  name: "Uniform (bytes, BP-corrected)"
+  description: |
+    Equal byte budget per language. Tokens per language are derived from
+    1/bp_l, then renormalized so token shares sum to 1.
+  method:
+    type: "static"
+    # token_share_l = (1/bp_l) / sum_j (1/bp_j)
+    # bp = {eng: 1.0, nld: 1.0516, zho: 0.9360}
+    # 1/bp = {eng: 1.0000, nld: 0.9509, zho: 1.0684}
+    # sum = 3.0193 → shares = {eng: 0.3312, nld: 0.3150, zho: 0.3538}
+    pi:
+      eng: 0.331202
+      nld: 0.314928
+      zho: 0.353870
+    online: null

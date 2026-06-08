@@ -1,0 +1,20 @@
+# MD_layerdup — Masked diffusion + inference-time layer duplication
+# "Reasoning depth" extension from the proposal: repeat the middle Transformer
+# blocks at inference time (no extra parameters, no extra training data) to add
+# effective depth for compositional reasoning / entity tracking.
+include: "base.yaml"
+
+condition:
+  id: "MD_layerdup"
+  name: "Masked Diffusion (2x middle-layer duplication at inference)"
+  description: |
+    Trained identically to MD_base. At evaluation/generation time the interior
+    blocks are applied twice, giving the iterative denoiser more compute per step.
+    Directly targets the COMPS (compositional reasoning) and Entity Tracking
+    hypotheses, which the proposal links to extra reasoning depth.
+  method:
+    type: "masked_diffusion"
+
+model:
+  # Training uses factor 1; flip to 2 only for eval (eval backend reads this).
+  layer_duplication_factor: 2

@@ -1,0 +1,23 @@
+# M_EN — Monolingual English oracle
+# Train only on English at the full per-language token budget.
+# Establishes the monolingual ceiling for EN evaluation.
+include: "base.yaml"
+
+condition:
+  id: "M_EN"
+  name: "Monolingual English"
+  description: |
+    Train only on English; used to compute the monolingual-vs-multilingual
+    interference gap at evaluation time. Multilingual conditions use the same
+    per-language token budget so the comparison is data-matched.
+  method:
+    type: "static"
+    pi:
+      eng: 1.0
+      nld: 0.0
+      zho: 0.0
+    online: null
+
+data:
+  # Override: only English; total budget = single-language budget (33.3M tokens).
+  languages: ["eng"]

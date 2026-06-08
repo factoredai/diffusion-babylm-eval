@@ -1,0 +1,3 @@
+# This folder is a placeholder for local checkpoint inspection.
+# Real training checkpoints are written under runs/<run>/checkpoints/ (kept on
+# Google Drive in Colab). See docs/STORAGE.md for the full layout.

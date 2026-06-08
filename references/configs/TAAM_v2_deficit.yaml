@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TAAM v2 — TAAM with cross-lingual deficit reward (level-based)
+# ─────────────────────────────────────────────────────────────────────────────
+# Same as TAAM (typology prior + EXP3 + byte-premium accounting) but swaps the
+# reward from "normalized_excess_loss" (delta-based, v1) to
+# "cross_lingual_deficit" (level-based, v2). See taam/reward.py.
+#
+# Motivation: the v1 reward (delta-based) starves languages that plateau at
+# high absolute loss, even when they remain the worst performers — this was
+# diagnosed in runs/2026-05-13_TAAM_seed42 where pi(zho) collapsed to the
+# structural floor 0.078 around step 14600 while zho's val loss was still
+# the highest of the three languages. The v2 reward rewards on the *level*
+# of the deficit relative to the easiest language, so the hardest language
+# always receives the largest reward and cannot be starved while it remains
+# the hardest.
+#
+# We also raise min_pi from 0.05 -> 0.10 as a defensive guardrail: even if a
+# different failure mode reappears, this guarantees a non-trivial fraction of
+# every language's data per step. With gamma=0.10 and min_pi=0.10 the
+# asymptotic floor (when soft -> 0) is 0.10 + (1-0.30)*0.0333 = 0.123, so
+# no language can drop below ~12.3% of the mix even in the worst case.
+# ─────────────────────────────────────────────────────────────────────────────
+include: "base.yaml"
+
+condition:
+  id: "TAAM_v2"
+  name: "TAAM v2 (typology prior + EXP3 + cross-lingual deficit reward)"
+  description: |
+    Online multilingual mixing with typology-initialized EXP3 and a
+    level-based cross-lingual deficit reward.
+    - pi_0  ← URIEL prior (softmax(isolation/T), floor=0.10)
+    - eta=0.10, gamma=0.10, min_pi=0.10 (asymptotic floor ~12.3% per language)
+    - reward = cross-lingual deficit (max(L_l - min_l L_l, 0)), normalized by
+      pooled cross-lingual std over last 20 evals, clipped at [0, +2]
+    - byte-premium accounting reported alongside token accounting
+  method:
+    type: "online"
+    pi_0:
+      eng: 0.321292
+      nld: 0.322712
+      zho: 0.355996
+    online:
+      algorithm: "exp3"
+      eta: 0.10
+      gamma: 0.10
+      min_pi: 0.10
+      reward: "cross_lingual_deficit"
+      update_every_steps: 200

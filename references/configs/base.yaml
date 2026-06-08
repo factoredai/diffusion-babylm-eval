@@ -1,0 +1,106 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TAAM base config — shared defaults across all 11 MVP conditions
+# ─────────────────────────────────────────────────────────────────────────────
+# Locked per improved_research_context_v2.md §3 (constraints) and §9 (recipe).
+# Individual condition configs override only what they need (use YAML anchors
+# in scripts/train.py: load base then merge condition-specific keys).
+# ─────────────────────────────────────────────────────────────────────────────
+
+experiment:
+  project_name: "taam-babylm2026"
+  seed_pool: [13, 42, 71]              # 3 seeds → report median + min-max
+
+data:
+  source: "babybabellm"
+  hf_dataset: "BabyBabelLM/babybabellm-pretrain"
+  tier: 1                              # Tier-1 only for MVP; mention Tier-2 in ablation
+  languages: ["eng", "nld", "zho"]
+  total_token_budget_per_lang: 33_333_333  # 100M / 3 (will adjust if BP-corrected)
+  # Held-out per-language dev slice for online reward computation.
+  # MUST be locked across all conditions for fair comparison.
+  reward_dev_tokens_per_lang: 5_000
+  # Held-out final dev set (separate from reward_dev) for fair evaluation.
+  final_dev_tokens_per_lang: 50_000
+
+tokenizer:
+  type: "sentencepiece"
+  vocab_size: 32_000
+  model_type: "bpe"
+  # Train on byte-equalized samples from EN+NL+ZH (see scripts/train_tokenizer.py).
+  byte_equalized: true
+  character_coverage: 0.9995           # high to handle Chinese characters
+  # Validation: per-language UNK rate must be below these thresholds.
+  unk_rate_thresholds:
+    eng: 0.0001
+    nld: 0.0005
+    zho: 0.0010
+
+model:
+  architecture: "gpt2"                 # GPT-2-style decoder-only
+  # ~30M-50M parameter "tiny" GPT-2 variant; matches BabyBabelLM smaller-baseline footprint.
+  n_layer: 6
+  n_head: 8
+  n_embd: 512
+  block_size: 512                       # context length
+
+training:
+  optimizer: "adamw"
+  learning_rate: 6.0e-4
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  warmup_steps: 1_000
+  lr_schedule: "cosine"
+  total_steps: 20_000                  # ~10 epochs over 100M tokens at batch_size*block_size
+  batch_size: 64
+  grad_accum_steps: 1
+  gradient_clip: 1.0
+  max_epochs: 10                       # CFP constraint
+  dtype: "bfloat16"                    # better numerical range than fp16 for small models
+  compile: false                        # leave torch.compile off for reproducibility
+
+  # Per-step language sampling:
+  # We mix at the BATCH level (each batch is monolingual; the language is
+  # sampled from pi_t). This is faster than mixing within a batch and matches
+  # ODM/DoReMi conventions. Sequence packing is per-language.
+  batch_level_mixing: true
+
+# Online updates: how often to re-evaluate per-language val loss and update pi.
+# 200 steps × batch_size 64 × block_size 512 ≈ 6.5M tokens per update window.
+online:
+  eval_every_steps: 200
+  log_every_steps: 50
+  checkpoint_every_steps: 2_000
+
+# Reward (only used if condition.method.online != null).
+# Supported types (see taam/reward.py):
+#   normalized_excess_loss   delta-based reward, v1 (pre-registered).
+#   cross_lingual_deficit    level-based reward, v2 (introduced after the
+#                            v1 failure-mode diagnosis on TAAM seed 42).
+# Per-condition override: condition.method.online.reward wins over this default.
+reward:
+  type: "normalized_excess_loss"
+  ref_window: 5
+  std_window: 20
+  clip: 2.0
+  std_fallback: 1.0
+
+# Byte premium (for B1/BP-corrected baseline). We use HF-card values
+# (see taam.BYTE_PREMIUM_HF). The CFP table is in taam.BYTE_PREMIUM_CFP.
+byte_premium:
+  source: "huggingface_card"
+  eng: 1.000000
+  nld: 1.051606
+  zho: 0.935966
+
+# Evaluation: deferred to a separate eval pipeline.
+evaluation:
+  # Run at end of training + at intermediate checkpoints for the
+  # acquisition-order analysis (H4).
+  intermediate_checkpoints: [500, 1_000, 2_000, 4_000, 8_000, 12_000, 16_000, 20_000]
+  benchmarks:
+    - "multiblimp"     # primary: per-language minimal pairs
+    - "glue_xl"        # English supplementary
+    - "lambada_zh"     # Mandarin perplexity / completion (if available)
+  acquisition_threshold: 0.70
+  acquisition_consecutive_evals: 2

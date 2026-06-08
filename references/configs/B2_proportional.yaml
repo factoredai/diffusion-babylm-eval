@@ -1,0 +1,35 @@
+# B2 — Proportional-to-available-tokens baseline
+# Fixed pi proportional to each language's available token count in the
+# BabyBabelLM Tier-1 corpus. This mirrors how multilingual LLM pretraining
+# is typically done in practice (sample proportional to data size).
+#
+# IMPORTANT: replace the placeholder counts below with the ACTUAL post-
+# tokenization token counts from your downloaded BabyBabelLM Tier-1 slices.
+# Right now we assume the BabyLM target of 100M tokens roughly split 1:1:1.
+# After Day-1 tokenization, regenerate this file with:
+#
+#     python scripts/compute_proportional_pi.py \
+#         --token-counts data/token_counts.json \
+#         --output configs/B2_proportional.yaml
+include: "base.yaml"
+
+condition:
+  id: "B2"
+  name: "Proportional-to-data"
+  description: |
+    Static pi proportional to per-language available token counts (the
+    canonical "real-world" multilingual pretraining recipe).
+  method:
+    type: "static"
+    # PLACEHOLDER — overwrite after tokenization in Day 1.
+    # If BabyBabelLM Tier-1 sizes are roughly equal at 100M total, pi ≈ (1/3, 1/3, 1/3),
+    # making B2 nearly identical to B0. Verify after tokenization.
+    pi:
+      eng: 0.333333
+      nld: 0.333333
+      zho: 0.333334
+    online: null
+    # Implementation note: at runtime the trainer should LOAD post-tokenization
+    # token counts from data/token_counts.json and recompute pi automatically,
+    # ignoring the placeholder above. The placeholder exists only so the file
+    # is loadable before Day-1 tokenization completes.
