@@ -56,7 +56,7 @@ model:
   # report this explicitly.
   #
   # Colab memory: 768-dim x 12-layer at ctx 1024 fits a T4/L4, but reduce
-  # training.batch_size (and use grad accumulation once wired) if you OOM.
+  # training.batch_size (and raise training.grad_accum_steps) if you OOM.
   n_layer: 12
   n_head: 12
   n_embd: 768
@@ -87,7 +87,8 @@ training:
   warmup_steps: 1_000
   lr_schedule: "cosine"
   # 32 x 1024-token sequences fits a 16GB T4 with the ~98M model in bf16.
-  # Lower it (and raise grad_accum_steps once wired) if you OOM.
+  # Effective batch = batch_size x grad_accum_steps. If you OOM, halve
+  # batch_size and double grad_accum_steps to keep the effective batch fixed.
   batch_size: 32
   grad_accum_steps: 1
   gradient_clip: 1.0
