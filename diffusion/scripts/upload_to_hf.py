@@ -25,7 +25,7 @@ Usage:
     export HF_TOKEN="hf_..."
     python scripts/upload_to_hf.py \
         --run-dir runs/2026-06-08_MD_base_seed42 \
-        --repo-id <user>/babylm-2026-strict-small-mdlm-seed42 \
+        --repo-id amosluna/babylm-2026-strict-small-mdlm-seed42 \
         --tokenizer-dir tokenizer/mdlm_bpe_16k \
         --condition MD_base --seed 42
     # add --dry-run to plan without uploading.
@@ -99,6 +99,20 @@ def decorate_checkpoint(ckpt_dir: Path, tokenizer_dir: Path | None, dry_run: boo
         for f in tokenizer_dir.iterdir():
             if f.is_file():
                 shutil.copy2(f, ckpt_dir / f.name)
+        _normalize_tokenizer_class(ckpt_dir / "tokenizer_config.json")
+
+
+def _normalize_tokenizer_class(cfg_path: Path) -> None:
+    """Pin a transformers-version-portable tokenizer_class so the official eval
+    pipeline (transformers 4.51.x) can load tokenizers saved by transformers>=5
+    (which write tokenizer_class="TokenizersBackend", unknown to 4.x)."""
+    if not cfg_path.is_file():
+        return
+    cfg = json.loads(cfg_path.read_text())
+    if cfg.get("tokenizer_class") != "PreTrainedTokenizerFast":
+        cfg["tokenizer_class"] = "PreTrainedTokenizerFast"
+        cfg.pop("backend", None)
+        cfg_path.write_text(json.dumps(cfg, indent=2))
 
 
 def render_model_card(condition: str, seed: int, run_summary: dict, repo_id: str, n_branches: int) -> str:
@@ -140,7 +154,7 @@ pseudo-log-likelihood), so the official BabyLM pipeline evaluates it with the
 ```bash
 cd strict
 ./eval_zero_shot.sh {repo_id} mlm
-./eval_finetuning.sh {repo_id}
+./eval_finetuning.sh --model_path {repo_id} --seed 42
 bash scripts/collate_preds.sh {repo_id} mlm strict-small --fast
 ```
 

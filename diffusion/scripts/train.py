@@ -36,6 +36,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import platform
 import subprocess
 import sys
@@ -203,7 +204,7 @@ def evaluate(model, dev_stream, masking: MaskingProcess, n_batches: int, batch_s
     import torch
 
     model.eval()
-    total, count = 0.0, 0
+    total, total_ce, count = 0.0, 0.0, 0
     g = torch.Generator(device=device).manual_seed(0)
     with torch.no_grad():
         for _ in range(n_batches):
@@ -211,9 +212,14 @@ def evaluate(model, dev_stream, masking: MaskingProcess, n_batches: int, batch_s
             corrupted, labels, weight = masking(ids, generator=g)
             logits = model(input_ids=corrupted).logits
             total += float(diffusion_loss(logits, labels, weight).item())
+            total_ce += float(torch.nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)), labels.view(-1), ignore_index=-100
+            ).item())
             count += 1
     model.train()
-    return total / max(count, 1)
+    # (weighted MDLM loss, unweighted per-masked-token CE) — the latter is the
+    # low-variance signal to watch for actual learning progress.
+    return total / max(count, 1), total_ce / max(count, 1)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -268,7 +274,8 @@ def train(
     block_size = int(config["model"]["n_positions"])
     batch_size = int(config["training"]["batch_size"])
     train_stream, dev_stream = build_streams(
-        token_data_dir, block_size=block_size, use_synthetic=use_synthetic, seed=seed
+        token_data_dir, block_size=block_size, use_synthetic=use_synthetic, seed=seed,
+        dev_fraction=float(config["data"].get("dev_fraction", 0.01)),
     )
     provider = BatchProvider(train_stream)
 
@@ -301,6 +308,7 @@ def train(
     # the data stream is deterministic in `step`, so the order is preserved.
     start_step = 0
     resumed_from = None
+    resumed_scheduler_state = None
     found = find_latest_checkpoint(checkpoints_dir) if resume else None
     if found is not None:
         ckpt_dir, start_step = found
@@ -314,6 +322,7 @@ def train(
             sd = torch.load(ckpt_dir / "pytorch_model.bin", map_location=device, weights_only=True)
         model.load_state_dict(sd, strict=False)
         optim.load_state_dict(state["optimizer"])
+        resumed_scheduler_state = state.get("scheduler")
         try:
             torch.set_rng_state(state["torch_rng"].cpu())
             np.random.set_state(state["numpy_rng"])
@@ -325,13 +334,72 @@ def train(
         LOG.info("Resuming from %s at step %d.", resumed_from, start_step)
         print(f"** Resuming from checkpoint {resumed_from} (step {start_step}). **")
 
-    # Derive total_steps from the word budget unless overridden.
+    # ── Word budget: prefer the corpus manifest's TRUE words/token ratio ──────
+    # The config's words_per_token is only a fallback estimate. Using the actual
+    # n_words/n_tokens keeps the words-seen accounting honest, and capping at
+    # max_epochs * n_words guarantees CFP compliance even if the corpus has
+    # slightly fewer than 10M words (100M seen would then exceed 10 epochs).
     words_per_token = float(config["data"]["words_per_token"])
+    word_budget = float(config["training"]["total_word_budget"])
+    manifest_path = Path(token_data_dir) / "manifest.json" if token_data_dir else None
+    if manifest_path is not None and manifest_path.exists():
+        man = json.loads(manifest_path.read_text())
+        n_words, n_tokens = man.get("n_words"), man.get("n_tokens")
+        if n_words and n_tokens:
+            words_per_token = n_words / n_tokens
+            max_epochs = float(config["training"].get("max_epochs", 10))
+            epoch_cap = max_epochs * n_words
+            if epoch_cap < word_budget:
+                LOG.info("Capping word budget at %d (= %g epochs x %d corpus words) < %d.",
+                         int(epoch_cap), max_epochs, n_words, int(word_budget))
+                word_budget = epoch_cap
+            LOG.info("Manifest: %d words / %d tokens -> words_per_token=%.4f.",
+                     n_words, n_tokens, words_per_token)
     words_per_step = batch_size * block_size * words_per_token
     if total_steps_override is not None:
         total_steps = total_steps_override
     else:
-        total_steps = int(np.ceil(config["training"]["total_word_budget"] / words_per_step))
+        # floor, not ceil: one step under the budget is always compliant; one
+        # step over the 10-epoch cap is a CFP violation.
+        total_steps = max(int(word_budget // words_per_step), 1)
+
+    # ── LR schedule: linear warmup → cosine decay ────────────────────────────
+    # Declared in base.yaml; applied here. Stepped once per training iteration so
+    # the cosine reaches ~0 at total_steps. The scheduler state is saved into
+    # trainer_state.pt and restored on resume, keeping the LR curve continuous.
+    from torch.optim.lr_scheduler import LambdaLR
+
+    # Warmup length: prefer a fraction of total_steps (robust to budget changes),
+    # else fall back to an absolute warmup_steps.
+    warmup_ratio = config["training"].get("warmup_ratio")
+    if warmup_ratio is not None:
+        warmup_steps = int(round(float(warmup_ratio) * total_steps))
+    else:
+        warmup_steps = int(config["training"].get("warmup_steps", 0) or 0)
+    lr_schedule = str(config["training"].get("lr_schedule", "constant"))
+    min_lr_ratio = float(config["training"].get("min_lr_ratio", 0.0) or 0.0)
+
+    def _lr_lambda(current: int) -> float:
+        # Linear warmup from 0 to the peak LR.
+        if warmup_steps > 0 and current < warmup_steps:
+            return (current + 1) / float(warmup_steps)
+        if lr_schedule == "cosine":
+            denom = max(1, total_steps - warmup_steps)
+            progress = min(max((current - warmup_steps) / denom, 0.0), 1.0)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            # Decay from the peak (1.0) down to a min_lr_ratio floor.
+            return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+        return 1.0
+
+    scheduler = LambdaLR(optim, _lr_lambda)
+    if resumed_scheduler_state is not None:
+        scheduler.load_state_dict(resumed_scheduler_state)
+    elif start_step > 0:
+        # Older checkpoint without saved scheduler state: fast-forward the curve.
+        for _ in range(start_step):
+            scheduler.step()
+    LOG.info("LR schedule: %s (warmup=%d steps, peak_lr=%g, min_lr_ratio=%g).",
+             lr_schedule, warmup_steps, float(config["training"]["learning_rate"]), min_lr_ratio)
 
     ckpt_cfg = config["checkpointing"]
     ckpt_schedule = compute_cfp_checkpoint_schedule(
@@ -356,7 +424,7 @@ def train(
     loss_csv = loss_csv_path.open(file_mode, newline="", encoding="utf-8")
     loss_writer = csv.writer(loss_csv)
     if write_header:
-        loss_writer.writerow(["step", "loss"])
+        loss_writer.writerow(["step", "loss", "ce_unweighted", "lr"])
 
     log_every = int(config["logging"]["log_every_steps"])
     eval_every = int(config["logging"]["eval_every_steps"])
@@ -375,7 +443,7 @@ def train(
     print(f"\n=== Training {cond_id} (seed={seed}): steps {start_step}->{total_steps} on {device} ===")
     t0 = time.time()
     last = t0
-    run_loss, run_count = 0.0, 0
+    run_loss, run_ce, run_count = 0.0, 0.0, 0
     optim.zero_grad(set_to_none=True)
 
     for step in range(start_step, total_steps):
@@ -386,37 +454,51 @@ def train(
         model.train()
         logits = model(input_ids=corrupted).logits
         loss = diffusion_loss(logits, labels, weight)
+        # Unweighted per-masked-token CE: a low-variance progress signal (the
+        # training loss above is reweighted by 1/t, which is very high variance).
+        with torch.no_grad():
+            ce_unw = torch.nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)), labels.view(-1), ignore_index=-100
+            )
         # Scale so accumulated grads average (not sum) over the window.
         (loss / grad_accum).backward()
         if (step + 1) % grad_accum == 0 or (step + 1) == total_steps:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
             optim.step()
             optim.zero_grad(set_to_none=True)
+        scheduler.step()
 
         cur = float(loss.detach().item())
+        cur_ce = float(ce_unw.item())
         run_loss += cur
+        run_ce += cur_ce
         run_count += 1
-        loss_writer.writerow([step + 1, cur])
+        loss_writer.writerow([step + 1, cur, cur_ce, scheduler.get_last_lr()[0]])
 
         if (step + 1) % log_every == 0 or step == 0:
             now = time.time()
             avg = run_loss / max(run_count, 1)
+            avg_ce = run_ce / max(run_count, 1)
+            cur_lr = scheduler.get_last_lr()[0]
             elapsed = now - last
             last = now
             log_file.write(json.dumps({
                 "step": step + 1, "phase": "train", "avg_train_loss": avg,
+                "avg_ce_unweighted": avg_ce, "lr": cur_lr,
                 "words_seen": int(round((step + 1) * words_per_step)), "elapsed_sec": elapsed,
             }) + "\n")
             log_file.flush()
-            run_loss, run_count = 0.0, 0
-            print(f"  step {step+1:6d}/{total_steps}  loss={avg:.4f}  "
-                  f"words={int((step+1)*words_per_step):,}  ({elapsed:.1f}s)")
+            run_loss, run_ce, run_count = 0.0, 0.0, 0
+            print(f"  step {step+1:6d}/{total_steps}  loss={avg:.4f}  ce={avg_ce:.4f}  "
+                  f"lr={cur_lr:.2e}  words={int((step+1)*words_per_step):,}  ({elapsed:.1f}s)")
 
         if (step + 1) % eval_every == 0:
-            val = evaluate(model, dev_stream, masking, n_eval_batches, batch_size, device)
-            log_file.write(json.dumps({"step": step + 1, "phase": "eval", "val_loss": val}) + "\n")
+            val, val_ce = evaluate(model, dev_stream, masking, n_eval_batches, batch_size, device)
+            log_file.write(json.dumps({
+                "step": step + 1, "phase": "eval", "val_loss": val, "val_ce_unweighted": val_ce,
+            }) + "\n")
             log_file.flush()
-            print(f"  eval@{step+1}  val_loss={val:.4f}")
+            print(f"  eval@{step+1}  val_loss={val:.4f}  val_ce={val_ce:.4f}")
 
         if (step + 1) in ckpt_schedule:
             words_seen = ckpt_schedule[step + 1]
@@ -428,6 +510,7 @@ def train(
             torch.save({
                 "step": step + 1,
                 "optimizer": optim.state_dict(),
+                "scheduler": scheduler.state_dict(),
                 "torch_rng": torch.get_rng_state(),
                 "numpy_rng": np.random.get_state(),
                 "cuda_rng": (torch.cuda.get_rng_state_all() if device.type == "cuda" else None),
@@ -513,7 +596,8 @@ def main(argv: list[str] | None = None) -> int:
             runs_root = REPO_ROOT / "runs"
             candidates = sorted(
                 (d for d in runs_root.glob(f"*_{args.condition}_seed{args.seed}")
-                 if (d / "checkpoints").is_dir() and any((d / "checkpoints").glob("step_*"))),
+                 if not d.name.startswith("_smoke")
+                 and (d / "checkpoints").is_dir() and any((d / "checkpoints").glob("step_*"))),
                 key=lambda d: d.stat().st_mtime,
             )
             if candidates and not args.no_resume:

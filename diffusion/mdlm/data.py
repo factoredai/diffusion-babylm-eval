@@ -1,21 +1,27 @@
 """English text data pipeline for the Strict-Small masked-diffusion model.
 
-Single-language analogue of the multilingual reference loader: documents are
-tokenized, concatenated with EOS separators, and sliced into fixed-length blocks
-(LM packing). The stream is infinite and reshuffles at every epoch boundary.
+The corpus (token shards produced by ``scripts/prepare_data.py``, which already
+terminate every document with EOS in-stream) is concatenated, split into small
+chunks, and served as fixed-length LM-packed blocks. Shuffling happens at three
+granularities each epoch — chunk order, a random block-boundary offset, and
+block serving order — so consecutive batches are decorrelated and no two epochs
+present the same blocks in the same order. (A previous version treated each
+multi-million-token *shard* as the shuffle unit and served blocks sequentially,
+which made batches almost perfectly correlated.)
+
+The dev slice is a stride-sample of chunks across the WHOLE corpus (all
+domains), not the last shard.
 
 For CPU smoke tests we generate a tiny synthetic corpus so the whole training /
 eval pipeline can be exercised with no data download and no GPU.
 
-Real-data convention (produced by ``scripts/prepare_data.py``):
+Real-data convention:
 
     token_data_dir/
         shard_0000.npy        # 1-D int32/int64 token ids
         shard_0001.npy
         ...
         manifest.json         # {"n_tokens", "n_words", "eos_token_id", ...}
-
-The last shard is held out as the dev slice for validation loss.
 """
 from __future__ import annotations
 
@@ -44,57 +50,76 @@ class Batch:
 
 
 class PackedTextStream:
-    """Infinite stream of LM-packed blocks from one (English) corpus."""
+    """Infinite stream of LM-packed blocks over a set of token chunks.
+
+    ``documents`` may be ``.npy`` paths or in-memory int arrays. EOS separators
+    are expected to already be present in the token stream (prepare_data.py
+    appends one after every document), so none are inserted here.
+    """
 
     def __init__(
         self,
-        token_id_files: Sequence[Path | str],
+        documents: Sequence[Path | str | np.ndarray],
         block_size: int = 512,
-        eos_token_id: int = 2,
-        shuffle_buffer: int = 1024,
         seed: int = 0,
+        shuffle: bool = True,
     ) -> None:
         self.block_size = int(block_size)
-        self.eos_token_id = int(eos_token_id)
-        self.shuffle_buffer = int(shuffle_buffer)
+        self.shuffle = bool(shuffle)
         self._rng = np.random.default_rng(seed)
-        self._files = [Path(p) for p in token_id_files]
-        if not self._files:
-            raise ValueError("Need at least one .npy file of token ids.")
         self._documents: list[np.ndarray] = []
-        for p in self._files:
-            if not p.exists():
-                raise FileNotFoundError(p)
-            arr = np.load(p)
-            self._documents.append(arr.ravel().astype(np.int64))
+        for d in documents:
+            if isinstance(d, (str, Path)):
+                p = Path(d)
+                if not p.exists():
+                    raise FileNotFoundError(p)
+                d = np.load(p)
+            self._documents.append(np.asarray(d).ravel().astype(np.int64))
+        if not self._documents:
+            raise ValueError("Need at least one document of token ids.")
         self._doc_index = list(range(len(self._documents)))
+        self._epoch = 0
         self._build_buffer()
 
     def _build_buffer(self) -> None:
-        if self.shuffle_buffer > 0:
+        """(Re)pack the corpus into blocks for one epoch.
+
+        Decorrelation happens at three granularities:
+          1. document/chunk order is permuted,
+          2. a random offset (< block_size) shifts every block boundary, so the
+             model never sees the exact same 1024-grams across epochs,
+          3. blocks are served in permuted order, so a batch mixes domains
+             instead of being 32 consecutive slices of one document.
+        """
+        if self.shuffle:
             self._rng.shuffle(self._doc_index)
-        chunks = []
-        for i in self._doc_index:
-            chunks.append(self._documents[i])
-            chunks.append(np.array([self.eos_token_id], dtype=np.int64))
-        self._buffer = np.concatenate(chunks)
-        self._cursor = 0
+        buf = np.concatenate([self._documents[i] for i in self._doc_index])
+        if self.shuffle and buf.size > self.block_size:
+            buf = buf[int(self._rng.integers(0, self.block_size)):]
+        n_blocks = buf.size // self.block_size
+        if n_blocks == 0:
+            raise ValueError(f"Corpus smaller than one block ({self.block_size} tokens).")
+        self._blocks = buf[: n_blocks * self.block_size].reshape(n_blocks, self.block_size)
+        self._order = self._rng.permutation(n_blocks) if self.shuffle else np.arange(n_blocks)
+        self._pos = 0
+        self._epoch += 1
 
     def total_tokens(self) -> int:
-        return int(self._buffer.size)
+        return int(sum(d.size for d in self._documents))
+
+    def _next_block(self) -> np.ndarray:
+        if self._pos >= self._order.size:
+            self._build_buffer()
+        block = self._blocks[self._order[self._pos]]
+        self._pos += 1
+        return block
 
     def __iter__(self) -> Iterator[np.ndarray]:
         while True:
-            if self._cursor + self.block_size > self._buffer.size:
-                self._build_buffer()
-            block = self._buffer[self._cursor : self._cursor + self.block_size]
-            self._cursor += self.block_size
-            yield block
+            yield self._next_block()
 
     def get_batch(self, batch_size: int) -> np.ndarray:
-        it = iter(self)
-        rows = [next(it) for _ in range(batch_size)]
-        return np.stack(rows, axis=0)
+        return np.stack([self._next_block() for _ in range(batch_size)], axis=0)
 
 
 class BatchProvider:
@@ -150,28 +175,49 @@ def build_streams(
     block_size: int,
     use_synthetic: bool,
     seed: int,
-    eos_token_id: int = 2,
+    dev_fraction: float = 0.01,
+    chunk_blocks: int = 8,
 ) -> tuple[PackedTextStream, PackedTextStream]:
-    """Build (train_stream, dev_stream). Last shard is held out for dev."""
-    if use_synthetic:
-        synth = make_synthetic_corpus(Path("data/_synthetic"), seed=seed, eos_token_id=eos_token_id)
-        train = PackedTextStream(synth[:-1] or synth, block_size, eos_token_id, seed=seed)
-        dev = PackedTextStream(synth[-1:], block_size, eos_token_id, seed=seed + 999)
-        return train, dev
+    """Build (train_stream, dev_stream).
 
-    if token_data_dir is None:
-        raise FileNotFoundError("token_data_dir is required for non-smoke runs.")
-    token_data_dir = Path(token_data_dir)
-    manifest = token_data_dir / "manifest.json"
-    if manifest.exists():
-        eos_token_id = int(json.loads(manifest.read_text()).get("eos_token_id", eos_token_id))
-    shards = sorted(token_data_dir.glob("shard_*.npy"))
-    if len(shards) < 2:
-        raise FileNotFoundError(
-            f"Expected >=2 shards under {token_data_dir}, found {len(shards)}. "
-            "Run scripts/prepare_data.py first."
-        )
-    LOG.info("Found %d shards (eos_id=%d); holding out last shard for dev.", len(shards), eos_token_id)
-    train = PackedTextStream(shards[:-1], block_size, eos_token_id, seed=seed)
-    dev = PackedTextStream(shards[-1:], block_size, eos_token_id, seed=seed + 999)
+    The whole corpus is concatenated and split into chunks of
+    ``chunk_blocks * block_size`` tokens; ``dev_fraction`` of the chunks are
+    held out by STRIDE-sampling, so the dev slice covers every domain of the
+    corpus instead of just the tail shard.
+    """
+    if use_synthetic:
+        shard_paths = make_synthetic_corpus(Path("data/_synthetic"), seed=seed)
+    else:
+        if token_data_dir is None:
+            raise FileNotFoundError("token_data_dir is required for non-smoke runs.")
+        shard_paths = sorted(Path(token_data_dir).glob("shard_*.npy"))
+        if not shard_paths:
+            raise FileNotFoundError(
+                f"No shard_*.npy under {token_data_dir}. Run scripts/prepare_data.py first."
+            )
+
+    tokens = np.concatenate([np.load(p).ravel().astype(np.int64) for p in shard_paths])
+    chunk = max(int(chunk_blocks) * int(block_size), int(block_size))
+    n_chunks = max(tokens.size // chunk, 1)
+    chunks = [tokens[i * chunk:(i + 1) * chunk] for i in range(n_chunks)]
+    tail = tokens[n_chunks * chunk:]
+    if tail.size:
+        chunks[-1] = np.concatenate([chunks[-1], tail])
+
+    n_dev = min(max(int(round(n_chunks * dev_fraction)), 1), n_chunks - 1) if n_chunks > 1 else 0
+    if n_dev > 0:
+        stride = max(n_chunks // n_dev, 1)
+        dev_idx = set(list(range(stride // 2, n_chunks, stride))[:n_dev])
+    else:
+        dev_idx = set()
+    train_docs = [c for i, c in enumerate(chunks) if i not in dev_idx]
+    dev_docs = [c for i, c in enumerate(chunks) if i in dev_idx] or [chunks[-1]]
+
+    LOG.info(
+        "Corpus: %d tokens -> %d chunks of ~%d tokens; train=%d chunks, dev=%d chunks "
+        "(stride-sampled across the corpus).",
+        tokens.size, n_chunks, chunk, len(train_docs), len(dev_docs),
+    )
+    train = PackedTextStream(train_docs, block_size, seed=seed, shuffle=True)
+    dev = PackedTextStream(dev_docs, block_size, seed=seed + 999, shuffle=False)
     return train, dev

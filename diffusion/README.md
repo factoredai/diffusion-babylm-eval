@@ -52,9 +52,9 @@ diffusion/
 │   ├── diffusion_eval_backend.py   diffusion-native zero-shot scorer
 │   └── colab_bootstrap.sh     one-command Colab setup (+ Drive persistence)
 ├── notebooks/                 simple, logged Colab notebooks
-│   ├── colab.ipynb            train
-│   ├── evaluation.ipynb       evaluate (official `mlm` backend) + collate
-│   └── upload_pipeline.ipynb  upload checkpoints
+│   ├── 1_colab.ipynb          train
+│   ├── 2_upload_pipeline.ipynb  upload checkpoints
+│   └── 3_evaluation.ipynb     evaluate (official `mlm` backend) + collate
 ├── docs/
 │   ├── EXPERIMENTS.md         research protocol: hypotheses, conditions, success criteria
 │   ├── STORAGE.md             ← where checkpoints / predictions / evals are saved
@@ -79,13 +79,13 @@ python scripts/train.py --condition MD_base --seed 42 \
 
 # 3) Upload checkpoints to the Hub (final → main, intermediates → chck_NM):
 python scripts/upload_to_hf.py --run-dir runs/<run> \
-    --repo-id <user>/babylm-2026-strict-small-mdlm-seed42 \
+    --repo-id amosluna/babylm-2026-strict-small-mdlm-seed42 \
     --tokenizer-dir tokenizer/mdlm_bpe_16k --condition MD_base --seed 42
 
 # 4) Evaluate + collate the submission (see docs/EVALUATION.md).
 ```
 
-On Colab, run `notebooks/colab.ipynb` instead — it bootstraps everything and
+On Colab, run `notebooks/1_colab.ipynb` instead — it bootstraps everything and
 persists data/checkpoints to Google Drive.
 
 ## Why this is scored as a masked LM

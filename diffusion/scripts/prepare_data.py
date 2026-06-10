@@ -66,9 +66,25 @@ def train_tokenizer(docs: list[str], vocab_size: int, out_dir: Path):
     fast.add_special_tokens({"mask_token": "[MASK]"})
     out_dir.mkdir(parents=True, exist_ok=True)
     fast.save_pretrained(out_dir)
+    # Portability: transformers>=5 writes tokenizer_class="TokenizersBackend",
+    # which older transformers (e.g. the eval pipeline's 4.51.x) cannot resolve
+    # -> AutoProcessor/AutoTokenizer raises "Unrecognized processing class".
+    # Pin the universally-understood class so the same files load on both.
+    _normalize_tokenizer_class(out_dir / "tokenizer_config.json")
     LOG.info("Tokenizer saved to %s (mask id=%d, vocab=%d)",
              out_dir, fast.mask_token_id, fast.vocab_size)
     return fast
+
+
+def _normalize_tokenizer_class(cfg_path: Path) -> None:
+    """Force a transformers-version-portable tokenizer_class in tokenizer_config.json."""
+    if not cfg_path.is_file():
+        return
+    cfg = json.loads(cfg_path.read_text())
+    if cfg.get("tokenizer_class") != "PreTrainedTokenizerFast":
+        cfg["tokenizer_class"] = "PreTrainedTokenizerFast"
+        cfg.pop("backend", None)  # tokenizers>=5-only key, harmless but tidy
+        cfg_path.write_text(json.dumps(cfg, indent=2))
 
 
 def tokenize_to_shards(docs: list[str], tokenizer, out_dir: Path, shard_tokens: int):

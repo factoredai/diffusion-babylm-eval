@@ -25,6 +25,16 @@ class MaskedDiffusionConfig(PretrainedConfig):
 
     model_type = "masked_diffusion_lm"
 
+    # Standard HF aliases (same trick as GPT2Config). The official GLUE
+    # fine-tuning harness reads `config.hidden_size` to size its classifier
+    # head, so these must resolve even though we store GPT-2-style names.
+    attribute_map = {
+        "hidden_size": "n_embd",
+        "max_position_embeddings": "n_positions",
+        "num_attention_heads": "n_head",
+        "num_hidden_layers": "n_layer",
+    }
+
     def __init__(
         self,
         vocab_size: int = 16_384,
@@ -72,12 +82,14 @@ class MaskedDiffusionConfig(PretrainedConfig):
 
         # Let the Hub load the custom code with trust_remote_code=True. The
         # uploader (scripts/upload_to_hf.py) copies config.py + model.py next to
-        # the weights, so these dotted paths resolve on the Hub. A masked-diffusion
-        # denoiser is scored exactly like a masked LM, so we register it under
-        # AutoModelForMaskedLM — this lets the official pipeline's `mlm` backend
-        # evaluate it out of the box.
+        # the weights, so these dotted paths resolve on the Hub.
+        # - AutoModelForMaskedLM: the zero-shot `mlm` backend scores the denoiser
+        #   exactly like a masked LM (logits head).
+        # - AutoModel: the GLUE fine-tuning harness loads a *headless* encoder
+        #   and expects last_hidden_state, hence the separate class.
         self.auto_map = {
             "AutoConfig": "config.MaskedDiffusionConfig",
+            "AutoModel": "model.MaskedDiffusionModel",
             "AutoModelForMaskedLM": "model.MaskedDiffusionLM",
         }
 

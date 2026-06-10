@@ -20,7 +20,7 @@ so:
 
 ```bash
 cd ../strict
-./eval_zero_shot.sh <user>/babylm-2026-strict-small-mdlm-seed42 mlm
+./eval_zero_shot.sh amosluna/babylm-2026-strict-small-mdlm-seed42 mlm
 ```
 
 works out of the box (the eval pipeline loads it with `trust_remote_code=True`).
@@ -35,7 +35,7 @@ works out of the box (the eval pipeline loads it with `trust_remote_code=True`).
 Run from `../strict/` after the model is public on the Hub.
 
 ```bash
-MODEL=<user>/babylm-2026-strict-small-mdlm-seed42
+MODEL=amosluna/babylm-2026-strict-small-mdlm-seed42
 
 # (a) FULL zero-shot on the final model (main)
 ./eval_zero_shot.sh $MODEL mlm
@@ -47,7 +47,7 @@ MODEL=<user>/babylm-2026-strict-small-mdlm-seed42
 ./eval_zero_shot_fast_all_revisions.sh $MODEL mlm strict-small
 
 # (d) GLUE fine-tuning on the final model
-./eval_finetune.sh $MODEL
+./eval_finetuning.sh --model_path $MODEL --seed 42
 
 # (e) Collate into the submission file (server-side scoring)
 bash scripts/collate_preds.sh $MODEL mlm strict-small

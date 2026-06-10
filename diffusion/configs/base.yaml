@@ -27,10 +27,13 @@ data:
   hf_dataset: "BabyLM-community/BabyLM-2026-Strict-Small"
   language: "eng"
   unique_word_budget: 10_000_000     # hard CFP cap on UNIQUE words
-  # Conversion used to translate the word budget into a token/step schedule.
-  # 1 BabyLM whitespace word ≈ 1.28 BPE tokens → ~0.78 words per token.
+  # FALLBACK conversion for the word budget -> token/step schedule. When the
+  # token dir has a manifest.json (it always does after prepare_data.py),
+  # train.py uses the TRUE n_words/n_tokens ratio instead, and additionally caps
+  # the budget at max_epochs * n_words to guarantee the <=10-epoch CFP rule.
   words_per_token: 0.78
-  # Held-out dev slice (last shard) for validation loss during training.
+  # Held-out dev slice for validation loss: a stride-sample of chunks across the
+  # WHOLE corpus (covers all domains), not the last shard.
   dev_fraction: 0.01
 
 tokenizer:
@@ -80,12 +83,21 @@ diffusion:
 
 training:
   optimizer: "adamw"
-  learning_rate: 3.0e-4
+  # Scaled from the official GPT-2 baseline's 5e-5: our effective batch is ~4x
+  # larger in tokens (32x1024 vs 16x512), so a higher peak LR is appropriate.
+  learning_rate: 2.0e-4
   weight_decay: 0.1
   beta1: 0.9
   beta2: 0.95
-  warmup_steps: 1_000
+  # Warmup as a FRACTION of total steps (robust if the word budget changes).
+  # ~5% is standard for a short run; the baseline used ~1% (213/21300). A fixed
+  # 1000 steps would have been ~25% of the 3913-step 100M-word budget — far too
+  # long (the peak LR wouldn't be reached until ~25M words).
+  warmup_ratio: 0.05
   lr_schedule: "cosine"
+  # Cosine decays to this fraction of the peak LR rather than to 0 (10% floor is
+  # standard practice and keeps a little plasticity at the end of the budget).
+  min_lr_ratio: 0.1
   # 32 x 1024-token sequences fits a 16GB T4 with the ~98M model in bf16.
   # Effective batch = batch_size x grad_accum_steps. If you OOM, halve
   # batch_size and double grad_accum_steps to keep the effective batch fixed.

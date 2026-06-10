@@ -78,17 +78,56 @@ Map directly to the proposal's failure modes so we can call the result early:
 **Success (MVP):** MD_base beats the AR baseline macro-average at the 100M-words
 checkpoint, by more than the seed min–max spread.
 
-## 6. Phased plan
+## 6. Phased plan (with status)
 
-1. **Setup & sanity** — `scripts/train.py --smoke-test` (CPU), then
-   `scripts/prepare_data.py` (real 10M corpus + tokenizer). *(done / validated)*
+1. **Setup & sanity** — smoke test + `prepare_data.py`. ***(done)***
 2. **MVP** — train one `MD_base` seed end-to-end; upload; full eval; compare to
-   baseline. Go/no-go on the hypotheses.
-3. **Curve** — use MD_base intermediate checkpoints + the AR baseline checkpoints
-   to plot §4. This is the core figure.
+   baseline. ***(done — see §6.1 for the outcome and §6.2 for the pipeline
+   fixes it triggered)***
+3. **Curve** — fast eval on every `chck_*` checkpoint to plot §4. ***(running)***
 4. **Robustness** — add seeds 13 & 71 for MD_base; report median ± min–max.
-5. **Ablations / extension** — `MD_freq_mask`, `MD_layerdup`.
-6. *(stretch)* Energy-based variant (arXiv:2410.21357) if the MVP succeeds.
+5. **Ablations** — low-`t` masking emphasis (new, motivated by the MVP result),
+   `MD_freq_mask`, `MD_layerdup` (via the ELBO scorer's duplication knob).
+
+Current results vs. the leaderboard and the prioritized next steps live in
+[`NEXT_STEPS.md`](NEXT_STEPS.md).
+
+### 6.1 MVP outcome (go/no-go call)
+
+Verdict: **the MVP "succeeded" as an experiment, not as a leaderboard win** —
+exactly the informative-either-way design of §1. With a clean, verified
+training pipeline (v2 below), `MD_base` seed 42 at the full 10-epoch budget:
+
+* **H4 (Entity Tracking): supported.** ~2× the official GPT-2 baseline and at
+  the level of the best leaderboard entries — attributable to bidirectionality,
+  *without* layer duplication yet.
+* **H1 (BLiMP) / H2 (COMPS): not supported at this budget.** BLiMP sits well
+  below the AR/hybrid baselines and was *unchanged* by the v2 training fixes,
+  which rules out "training bug" as the explanation: the gap is attributable to
+  the objective at ≤10 epochs. This is the pre-registered
+  "compute-for-data trade-off fails" branch of §5 — the crossover analysis (§4
+  curve) is now the headline deliverable.
+* **H3 (GLUE): pending.**
+* Working mechanistic hypothesis for the BLiMP↔EntityTracking split: PLL
+  scoring probes the low-masking regime (`t→0`), but training spreads compute
+  over `t ~ U(0,1)`; models trained *only* at low masking ratios (GPT-BERT)
+  excel at BLiMP. Motivates the low-`t` ablation in phase 5.
+
+### 6.2 Training pipeline v2 (fixes applied after the first MVP run)
+
+The first MVP run exposed three implementation problems; all are fixed and the
+MVP was re-trained from scratch on the corrected pipeline:
+
+| Fix | Was | Now |
+| --- | --- | --- |
+| **Data shuffling** (`mdlm/data.py`) | shuffle unit = multi-million-token *shard*; blocks served sequentially → batches were 32 consecutive slices of one domain, identical block boundaries every epoch | per-epoch shuffling at three granularities: chunk order, random block-boundary offset, served-block order. Loss oscillations (domain cycling) disappeared |
+| **Loss normalization** (`mdlm/masking.py`) | divided by the batch's masked-token count → loss scale fluctuated with the sampled `t`'s (≈2× CE, very noisy) | exact LLaDA Eq. 3: per-sequence `1/(t·L)`, batch-averaged. Loss ≈ CE, ~5× less noise |
+| **Word accounting** (`scripts/train.py`) | hardcoded `words_per_token=0.78` → the run stopped at ~8 true epochs, leaving budget unused | true ratio read from `manifest.json` (~0.61), budget capped at `min(100M, 10 × n_words)`, `floor` not `ceil` on steps → full 10 epochs, guaranteed CFP-compliant |
+| **Dev split** (`mdlm/data.py`) | last shard only (single domain) | stride-sampled chunks across the whole corpus |
+
+Net effect: val CE dropped from ~7.5–9 (noisy, domain-biased) to a stable
+~5.9 with val ≈ train (no overfitting). Downstream zero-shot scores were
+**unchanged within noise** — which is itself the §6.1 finding.
 
 ## 7. Reproducibility
 
@@ -116,6 +155,6 @@ python scripts/train.py --condition MD_base --seed 42 \
     --token-data data/tokens --tokenizer tokenizer/mdlm_bpe_16k -v
 
 # Upload + evaluate + collate  (see docs/EVALUATION.md)
-python scripts/upload_to_hf.py --run-dir runs/<run> --repo-id <user>/... \
+python scripts/upload_to_hf.py --run-dir runs/<run> --repo-id amosluna/... \
     --tokenizer-dir tokenizer/mdlm_bpe_16k --condition MD_base --seed 42
 ```

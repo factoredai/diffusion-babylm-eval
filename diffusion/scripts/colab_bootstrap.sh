@@ -10,7 +10,7 @@
 #      bash scripts/colab_bootstrap.sh                  # full setup
 #      bash scripts/colab_bootstrap.sh --no-drive       # don't touch Drive
 #      bash scripts/colab_bootstrap.sh --skip-data      # data already prepared
-#      bash scripts/colab_bootstrap.sh --drive-root /content/drive/MyDrive/BabyLM/diffusion
+#      bash scripts/colab_bootstrap.sh --drive-root /content/drive/MyDrive/Researchs/BabyLM_diffusion_G4
 #
 #  Exit codes: 0 ok | 2 no CUDA | 3 HF auth | 4 data | 5 smoke test
 # ──────────────────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-DRIVE_ROOT="/content/drive/MyDrive/BabyLM/diffusion"
+DRIVE_ROOT="/content/drive/MyDrive/Researchs/BabyLM_diffusion_G4"
 DO_DRIVE=1
 DO_DATA=1
 DO_SMOKE=1
@@ -110,6 +110,6 @@ cat <<'EOF'
 
     # Upload checkpoints to the Hub as chck_NM branches:
     python scripts/upload_to_hf.py --run-dir runs/<run> \
-        --repo-id <user>/babylm-2026-strict-small-mdlm-seed42 \
+        --repo-id amosluna/babylm-2026-strict-small-mdlm-seed42 \
         --tokenizer-dir tokenizer/mdlm_bpe_16k --condition MD_base --seed 42
 EOF

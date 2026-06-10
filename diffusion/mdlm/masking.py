@@ -99,20 +99,29 @@ def diffusion_loss(
 ) -> torch.Tensor:
     """MDLM/LLaDA reweighted denoising cross-entropy.
 
+    Exactly LLaDA's objective (Nie et al. 2025, Eq. 3):
+
+        L = E_b [ (1/t_b) * (1/T) * sum_{masked l} CE(x_l) ]
+
+    Each sequence is normalized by its FULL length ``T`` (not its masked count)
+    and weighted by ``1/t``; the batch is averaged with equal per-sequence
+    weight. Since E[#masked] = t*T, the 1/t and the masked-count scaling cancel
+    in expectation, so the loss magnitude is stable across t draws. (A previous
+    version divided by the batch's total masked count, which made the loss scale
+    fluctuate with the sampled t's — the source of the very noisy loss curve.)
+
     Args:
         logits: (B, T, V) model outputs.
         labels: (B, T) original tokens at masked positions, ``-100`` elsewhere.
         weight: (B, 1) per-sequence ``1/t`` weight from :class:`MaskingProcess`.
 
     Returns:
-        Scalar loss: mean over masked tokens of ``weight * CE``.
+        Scalar loss (per-token NELBO bound estimate).
     """
     B, T, V = logits.shape
     ce = torch.nn.functional.cross_entropy(
         logits.view(-1, V), labels.view(-1), ignore_index=-100, reduction="none"
     ).view(B, T)
     masked = labels != -100
-    per_seq_weight = weight.expand(B, T)
-    num = (ce * per_seq_weight * masked).sum()
-    den = masked.sum().clamp(min=1)
-    return num / den
+    per_seq = (ce * masked).sum(dim=1)          # (B,) sum of CE over masked positions
+    return (weight.squeeze(1) * per_seq / T).mean()
