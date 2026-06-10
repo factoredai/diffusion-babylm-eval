@@ -1,0 +1,139 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Masked-Diffusion BabyLM — base config (shared defaults across all experiments)
+# ─────────────────────────────────────────────────────────────────────────────
+# Track: BabyLM 2026 Strict-Small (English only).
+# Every experiment config (configs/MD_*.yaml) does `include: "base.yaml"` and
+# overrides only the keys it changes. scripts/train.py deep-merges them.
+#
+# CFP constraints encoded here (https://babylm.github.io/guidelines.html):
+#   * <= 10M UNIQUE training words.
+#   * <= 10 epochs over the training data.
+#   * Total exposure (input + generated tokens) capped at 100M words for
+#     Strict-Small; this is the upper bound used for the final checkpoint.
+#   * Intermediate checkpoints required at 1M..10M (every 1M) and
+#     10M..100M (every 10M). scripts/train.py builds this schedule automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+experiment:
+  project_name: "masked-diffusion-babylm2026"
+  track: "strict-small"
+  seed_pool: [13, 42, 71]            # 3 seeds → report median + min/max
+
+data:
+  # Official Strict-Small corpus (10M-word release: bnc_spoken, childes,
+  # gutenberg, open_subtitles, simple_wiki, switchboard). Column "text", split
+  # "train" (~1.1M lines). Override with your own dataset id if you build one —
+  # the 10M-word budget still applies.
+  hf_dataset: "BabyLM-community/BabyLM-2026-Strict-Small"
+  language: "eng"
+  unique_word_budget: 10_000_000     # hard CFP cap on UNIQUE words
+  # FALLBACK conversion for the word budget -> token/step schedule. When the
+  # token dir has a manifest.json (it always does after prepare_data.py),
+  # train.py uses the TRUE n_words/n_tokens ratio instead, and additionally caps
+  # the budget at max_epochs * n_words to guarantee the <=10-epoch CFP rule.
+  words_per_token: 0.78
+  # Held-out dev slice for validation loss: a stride-sample of chunks across the
+  # WHOLE corpus (covers all domains), not the last shard.
+  dev_fraction: 0.01
+
+tokenizer:
+  # A small BPE tokenizer trained on the Strict-Small corpus. The tokenizer's
+  # training text counts toward the 10M-word budget (CFP), so we train it on the
+  # same corpus we pretrain on — no extra data.
+  type: "bpe"
+  vocab_size: 16_384
+  # Special tokens; ids must match mdlm/config.py defaults.
+  specials: { unk: 0, bos: 1, eos: 2, pad: 3 }
+  # The absorbing [MASK] state is appended after the vocab at id == vocab_size.
+
+model:
+  architecture: "masked_diffusion_lm"   # mdlm.model.MaskedDiffusionLM
+  # Sized to MATCH the official baseline `gpt2-baseline-BabyLM-2026-Strict-Small`
+  # (GPT-2 Small: 12 layers, 768 dim, 12 heads, ffn=4x, ctx 1024, vocab 16384).
+  # Same parameter count (~98M with the tied 16384-vocab head) so the diffusion
+  # vs. autoregressive comparison isolates the TRAINING OBJECTIVE, not capacity.
+  #
+  # Caveat for the paper: our model is BIDIRECTIONAL (no causal mask) while the
+  # baseline is causal. That is intrinsic to the objective (masked diffusion
+  # needs to see both sides), so "same architecture" means same width/depth/heads;
+  # report this explicitly.
+  #
+  # Colab memory: 768-dim x 12-layer at ctx 1024 fits a T4/L4, but reduce
+  # training.batch_size (and raise training.grad_accum_steps) if you OOM.
+  n_layer: 12
+  n_head: 12
+  n_embd: 768
+  n_positions: 1024                      # context / block size (matches baseline n_ctx)
+  ffn_mult: 4                            # n_inner = 4 * n_embd = 3072 (baseline default)
+  dropout: 0.1
+  layer_norm_eps: 1.0e-5
+  # Inference-time "reasoning depth": repeat middle blocks N times (no new
+  # params). 1 = off (MVP). See the duplicated-layers hypothesis in the proposal.
+  layer_duplication_factor: 1
+
+diffusion:
+  # Absorbing-state masked diffusion (MDLM / LLaDA). t ~ U(t_min, t_max) is the
+  # per-sequence masking ratio; the loss is reweighted by 1/t.
+  t_min: 1.0e-3
+  t_max: 1.0
+  # Frequency-informed masking: mask very frequent tokens slightly less often.
+  # false = uniform masking (standard MDLM). See configs/MD_freq_mask.yaml.
+  frequency_informed_masking: false
+  freq_strength: 0.5
+
+training:
+  optimizer: "adamw"
+  # Scaled from the official GPT-2 baseline's 5e-5: our effective batch is ~4x
+  # larger in tokens (32x1024 vs 16x512), so a higher peak LR is appropriate.
+  learning_rate: 2.0e-4
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  # Warmup as a FRACTION of total steps (robust if the word budget changes).
+  # ~5% is standard for a short run; the baseline used ~1% (213/21300). A fixed
+  # 1000 steps would have been ~25% of the 3913-step 100M-word budget — far too
+  # long (the peak LR wouldn't be reached until ~25M words).
+  warmup_ratio: 0.05
+  lr_schedule: "cosine"
+  # Cosine decays to this fraction of the peak LR rather than to 0 (10% floor is
+  # standard practice and keeps a little plasticity at the end of the budget).
+  min_lr_ratio: 0.1
+  # 32 x 1024-token sequences fits a 16GB T4 with the ~98M model in bf16.
+  # Effective batch = batch_size x grad_accum_steps. If you OOM, halve
+  # batch_size and double grad_accum_steps to keep the effective batch fixed.
+  batch_size: 32
+  grad_accum_steps: 1
+  gradient_clip: 1.0
+  dtype: "bfloat16"
+  compile: false
+  # Total exposure budget in WORDS (input + generated). Strict-Small upper bound.
+  # total_steps is DERIVED from this at runtime: see scripts/train.py.
+  total_word_budget: 100_000_000
+  max_epochs: 10                         # CFP compute limit
+
+logging:
+  log_every_steps: 50
+  eval_every_steps: 500
+  n_eval_batches: 8
+
+# Mandatory intermediate-checkpoint schedule (CFP §4.2 for Strict-Small).
+# Phases are expressed in WORDS seen; scripts/train.py converts them to steps.
+checkpointing:
+  phase1_every_words: 1_000_000          # every 1M ...
+  phase1_max_words: 10_000_000           # ... up to 10M
+  phase2_every_words: 10_000_000         # then every 10M ...
+  phase2_max_words: 100_000_000          # ... up to 100M (Strict-Small stops here)
+  # HF branch revision naming consumed by the eval pipeline: chck_1M, chck_10M, ...
+  branch_prefix: "chck_"
+
+evaluation:
+  # Reference baseline for the head-to-head comparison (already on the Hub).
+  baseline_model: "BabyLM-community/gpt2-baseline-BabyLM-2026-Strict-Small"
+  # Diffusion-native scorer for minimal-pair tasks: "pll" (default) or "elbo".
+  scoring_method: "pll"
+  pll_max_positions: 256                 # cap per-sequence forward passes
+  elbo_n_samples: 16
+  # Zero-shot tasks run on every checkpoint (fast) + the final model (full).
+  zero_shot_tasks: ["blimp", "supplement", "ewok", "comps", "entity_tracking"]
+  # Fine-tuning (GLUE) is run on the FINAL checkpoint only.
+  finetune_tasks: ["boolq", "mnli", "mrpc", "multirc", "qqp", "rte", "wsc"]
