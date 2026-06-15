@@ -107,7 +107,12 @@ training pipeline (v2 below), `MD_base` seed 42 at the full 10-epoch budget:
   the objective at ≤10 epochs. This is the pre-registered
   "compute-for-data trade-off fails" branch of §5 — the crossover analysis (§4
   curve) is now the headline deliverable.
-* **H3 (GLUE): pending.**
+* **H3 (GLUE): not supported.** (Super)GLUE macro **60.8** vs GPT-2 baseline
+  **63.8** and GPT-BERT masked **66.0** (primary metric per task; see
+  `NEXT_STEPS.md` for the per-task table). Wins on boolq (66.97 vs 65.87);
+  loses badly on mnli (40.10 vs 49.80) and multirc (58.37 vs 64.52). Fine-
+  tuning does not close the pretraining gap — same global-context vs fine-syntax
+  split seen in zero-shot.
 * Working mechanistic hypothesis for the BLiMP↔EntityTracking split: PLL
   scoring probes the low-masking regime (`t→0`), but training spreads compute
   over `t ~ U(0,1)`; models trained *only* at low masking ratios (GPT-BERT)
