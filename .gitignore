@@ -1,3 +1,10 @@
 strict/evaluation_data
 __pycache__
 ckpt/
+
+venv/
+.venv/
+
+**/*.env
+.idea/
+**/.task/
