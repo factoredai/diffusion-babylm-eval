@@ -1,0 +1,19 @@
+# AR_baseline_ref — Autoregressive control (reference only, NOT trained here)
+# This config documents the autoregressive GPT-2 baseline we benchmark against.
+# It is NOT trained by scripts/train.py (which implements the diffusion loss);
+# it points at the official Hub model so the evaluation notebook can score it
+# side-by-side with our diffusion checkpoints under identical conditions.
+include: "base.yaml"
+
+condition:
+  id: "AR_baseline_ref"
+  name: "GPT-2 Strict-Small baseline (autoregressive control)"
+  description: |
+    The matched-scale autoregressive comparison point. We do not retrain it; we
+    pull the official checkpoint from the Hub and run it through the same
+    zero-shot + fine-tuning evaluation as the diffusion models. This isolates the
+    training objective (diffusion vs. AR) as the only variable.
+  method:
+    type: "reference_only"
+    hub_model_id: "BabyLM-community/gpt2-baseline-BabyLM-2026-Strict-Small"
+    backend: "causal"          # official pipeline backend for this model

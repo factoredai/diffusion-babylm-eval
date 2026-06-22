@@ -1,0 +1,19 @@
+# MD_freq_mask — Masked diffusion with frequency-informed masking
+# Ablation over the masking distribution: down-weight the masking probability of
+# very frequent tokens so the denoising signal concentrates on rarer, more
+# informative words. Everything else matches MD_base.
+include: "base.yaml"
+
+condition:
+  id: "MD_freq_mask"
+  name: "Masked Diffusion (frequency-informed masking)"
+  description: |
+    Same model and budget as MD_base, but the forward process masks high-frequency
+    tokens less often (freq_strength controls the effect). Probes whether shaping
+    the masking distribution improves sample efficiency on the 10M-word corpus.
+  method:
+    type: "masked_diffusion"
+
+diffusion:
+  frequency_informed_masking: true
+  freq_strength: 0.5

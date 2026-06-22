@@ -1,0 +1,16 @@
+# MD_base — Masked-Diffusion MVP (the primary submission condition)
+# Standard absorbing-state masked diffusion, uniform masking, no layer
+# duplication. This is the model we compare head-to-head against the official
+# GPT-2 Strict-Small baseline (the proxy hypothesis in the proposal).
+include: "base.yaml"
+
+condition:
+  id: "MD_base"
+  name: "Masked Diffusion (uniform masking)"
+  description: |
+    LLaDA/MDLM-style masked diffusion on a GPT-2-scale bidirectional Transformer,
+    trained on 10M unique English words for up to 10 epochs (100M words seen).
+    Tests the core hypothesis: does a diffusion LM beat the AR baseline on
+    BLiMP / COMPS / GLUE / Entity Tracking under the Strict-Small budget?
+  method:
+    type: "masked_diffusion"

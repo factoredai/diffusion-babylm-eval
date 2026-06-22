@@ -2,7 +2,7 @@
 """Print aggregate markdown tables of strict-track results from results/.
 
 Zero-shot results are read from:
-  results/{model}/main/{eval_type}/causal/{task}/{subtask}/best_temperature_report.txt
+  results/{model}/main/{eval_type}/{backend}/{task}/{subtask}/best_temperature_report.txt
 
 Finetune results are read from:
   results/{model}/main/finetune/{task}/results.txt
@@ -82,8 +82,9 @@ def main():
     zeroshot_models: dict[str, dict[str, float]] = {}
     zeroshot_row_order: list[str] = []
 
-    for report in sorted(results_dir.glob("*/main/*/causal/*/*/best_temperature_report.txt")):
-        # parts: results / model / main / eval_type / causal / task / subtask / filename
+    # backend dir is '*' (mlm, causal, enc_dec, ...) so the table is backend-agnostic.
+    for report in sorted(results_dir.glob("*/main/*/*/*/*/best_temperature_report.txt")):
+        # parts: results / model / main / eval_type / backend / task / subtask / filename
         parts = report.parts
         model     = parts[-7]
         eval_type = parts[-5]
